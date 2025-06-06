@@ -5,6 +5,7 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 import warnings
 import logging # Import logging module 📝
+import jdatetime
 
 # Setup a logger for this module
 logger = logging.getLogger(__name__)
@@ -32,7 +33,15 @@ def calculate_rfm(df_transactions):
     # Convert 'تاریخ فاکتور' to datetime objects directly using pandas.to_datetime.
     # This is robust for various standard Gregorian date formats.
     # 'errors='coerce' will turn any unparseable dates into NaT (Not a Time).
-    df_transactions['تاریخ فاکتور_greg'] = pd.to_datetime(df_transactions['تاریخ فاکتور'], errors='coerce')
+    def convert_shamsi_to_gregorian(shamsi_str):
+        try:
+            y, m, d = map(int, str(shamsi_str).split('-'))
+            return jdatetime.date(y, m, d).togregorian()
+        except:
+            return pd.NaT
+
+    df_transactions['تاریخ فاکتور_greg'] = df_transactions['تاریخ فاکتور'].apply(convert_shamsi_to_gregorian)
+
     
     # Drop rows where date conversion resulted in NaT (Not a Time)
     df_transactions.dropna(subset=['تاریخ فاکتور_greg'], inplace=True) 

@@ -3,6 +3,7 @@ import pandas as pd
 from openpyxl import load_workbook, Workbook
 from datetime import datetime # Using standard datetime for Gregorian dates 🗓️
 import os
+import jdatetime
 
 def create_initial_excel(file_path):
     """
@@ -112,7 +113,7 @@ def save_purchase(file_path, customer_name, customer_phone, amount):
         # New customer, generate a new ID and add to Customers sheet 🆕
         customer_id = get_next_customer_id(df_customers)
         # Get current date in Gregorian format YYYY/MM/DD 🗓️
-        today_date = datetime.now().strftime("%Y/%m/%d") 
+        today_date = jdatetime.date.today().strftime("%Y-%m-%d")
         ws_customers.append([customer_id, customer_name, customer_phone, today_date, ""]) # Add empty description ➕
         print(f"Added new customer: {customer_id} ({customer_name}, {customer_phone}) 🎉")
 
@@ -124,7 +125,7 @@ def save_purchase(file_path, customer_name, customer_phone, amount):
 
     invoice_number = get_next_invoice_number(df_transactions)
     # Current date in Gregorian for invoice 🗓️
-    invoice_date = datetime.now().strftime("%Y/%m/%d") 
+    invoice_date = jdatetime.date.today().strftime("%Y-%m-%d")
 
     ws_transactions.append([customer_id, invoice_date, invoice_number, amount])
     print(f"Added new transaction: {invoice_number} for customer {customer_id} with amount {amount} 💸")
@@ -144,6 +145,50 @@ def save_purchase(file_path, customer_name, customer_phone, amount):
     # Save the entire workbook 💾
     wb.save(file_path)
     print(f"Excel file saved successfully at {file_path} ✨")
+
+
+def save_purchase_bulk(file_path, customer_name, customer_phone, amount, description=""):
+    """
+    Saves bulk customer data into the Excel file. Handles new and existing customers.
+    """
+    try:
+        wb = load_workbook(file_path)
+    except FileNotFoundError:
+        create_initial_excel(file_path)
+        wb = load_workbook(file_path)
+
+    # --- Customers Sheet ---
+    ws_customers = wb["Customers"]
+    df_customers = pd.DataFrame(ws_customers.iter_rows(min_row=2, values_only=True),
+                                columns=["کد مشتری", "نام", "شماره تماس", "تاریخ عضویت", "توضیحات"])
+
+    # Check if customer already exists
+    existing = df_customers[df_customers["شماره تماس"] == customer_phone]
+    if not existing.empty:
+        customer_id = existing["کد مشتری"].iloc[0]
+    else:
+        customer_id = get_next_customer_id(df_customers)
+        today_date = jdatetime.date.today().strftime("%Y-%m-%d")
+        ws_customers.append([customer_id, customer_name, customer_phone, today_date, description])
+
+    # --- Transactions Sheet ---
+    ws_transactions = wb["Transactions"]
+    df_transactions = pd.DataFrame(ws_transactions.iter_rows(min_row=2, values_only=True),
+                                   columns=["شناسه مشتری", "تاریخ فاکتور", "شماره فاکتور", "مبلغ (تومان)"])
+
+    invoice_number = get_next_invoice_number(df_transactions)
+    invoice_date = jdatetime.date.today().strftime("%Y-%m-%d")
+    ws_transactions.append([customer_id, invoice_date, invoice_number, amount])
+
+    # Form Sheet: optional
+    ws_form = wb["Form"]
+    for row in ws_form.iter_rows(min_row=2, max_row=ws_form.max_row):
+        for cell in row:
+            cell.value = None
+    ws_form.append([customer_name, customer_id, customer_phone, invoice_date, invoice_number, amount])
+
+    wb.save(file_path)
+
 
 def get_customers_data(file_path):
     """
@@ -193,7 +238,7 @@ def create_temp_excel_report(df: pd.DataFrame, sheet_name: str, user_id: int, re
         str: The full path to the created temporary Excel file. 📂
     """
     # Use standard datetime for the date in the temporary file name 🗓️
-    today_date_str = datetime.now().strftime("%Y-%m-%d")
+    today_date_str = jdatetime.date.today().strftime("%Y-%m-%d")
     # Example filename: user_data/12345_customers_2024-06-03.xlsx 📄
     temp_file_name = f"{user_id}_{report_type}_{today_date_str}.xlsx"
     temp_file_path = os.path.join(data_dir, temp_file_name)

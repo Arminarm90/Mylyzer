@@ -1,13 +1,9 @@
 # main.py
 import logging
 import os
+import zipfile  # Import zipfile module for creating zip archives 📚
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
-
-# Import custom modules 📚
-import excel_manager
-import user_manager
-import data_analyzer
 from dotenv import load_dotenv
 
 # Import custom modules 📚
@@ -15,7 +11,10 @@ import excel_manager
 import user_manager
 import data_analyzer
 
+
 load_dotenv()
+
+
 # Enable logging 📝
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -33,7 +32,8 @@ DATA_DIR = "user_data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # --- ConversationHandler States for /new_purchase 💬 ---
-CUSTOMER_NAME, CUSTOMER_PHONE, PURCHASE_AMOUNT = range(3)
+# New states for selecting entry mode and bulk data input
+SELECT_ENTRY_MODE, SINGLE_CUSTOMER_NAME, SINGLE_CUSTOMER_PHONE, SINGLE_PURCHASE_AMOUNT, BULK_PURCHASE_DATA = range(5)
 
 # --- Helper Functions 🛠️ ---
 def get_user_excel_path(user_id):
@@ -88,8 +88,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "/list_customers - مشاهده لیست مشتریان 👥\n"
             "/list_transactions - مشاهده تاریخچه تراکنش‌ها 💰\n"
             "/analyze_data - دریافت تحلیل مشتریان 📊\n"
-            "/get_full_excel - دریافت فایل اکسل کامل 📄\n", # Added new command
-            reply_markup=ReplyKeyboardRemove() # Remove the phone number sharing keyboard 🧹
+            "/get_full_excel - دریافت فایل اکسل کامل 📄\n",
+            reply_markup=ReplyKeyboardRemove()  # Remove the phone number sharing keyboard 🧹
         )
 
 async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -121,61 +121,77 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "/list_customers - مشاهده لیست مشتریان 👥\n"
             "/list_transactions - مشاهده تاریخچه تراکنش‌ها 💰\n"
             "/analyze_data - دریافت تحلیل مشتریان 📊\n"
-            "/get_full_excel - دریافت فایل اکسل کامل 📄\n", # Added new command
-            reply_markup=ReplyKeyboardRemove() # Remove the phone number sharing keyboard 🧹
+            "/get_full_excel - دریافت فایل اکسل کامل 📄\n",
+            reply_markup=ReplyKeyboardRemove()  # Remove the phone number sharing keyboard 🧹
         )
     else:
         await update.message.reply_text("لطفاً شماره تماس خودتان را به اشتراک بگذارید. ☝️")
 
-async def new_purchase_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def new_purchase_entry_point(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Starts the conversation flow for registering a new purchase. 📝
-    Checks if the user is registered (has a phone number).
+    Starts the conversation flow for registering a new purchase by asking the user for the entry mode. 📝
     """
     user_id = update.effective_user.id
     if not user_manager.get_user_phone(user_id):
         await update.message.reply_text("لطفاً ابتدا با دستور /start شماره تماس خود را به اشتراک بگذارید. 📲")
-        return ConversationHandler.END # End conversation if user is not registered 🛑
+        return ConversationHandler.END  # End conversation if user is not registered 🛑
 
-    await update.message.reply_text("لطفاً نام مشتری را وارد کنید: 🧑‍🤝‍🧑")
-    return CUSTOMER_NAME # Move to the next state to get customer name ➡️
+    keyboard = [
+        [KeyboardButton("ثبت خرید تکی ➕")],
+        [KeyboardButton("ثبت چند خرید یکجا 📝")],
+        [KeyboardButton("انصراف 🛑")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    await update.message.reply_text(
+        "لطفاً نحوه ورود اطلاعات خرید را انتخاب کنید:",
+        reply_markup=reply_markup
+    )
+    return SELECT_ENTRY_MODE # Move to the state where user selects entry mode ➡️
 
-async def get_customer_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def select_single_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Gets the customer's name from the user and stores it in user_data. 💾
+    Triggered when user selects "ثبت خرید تکی ➕".
+    Prompts for customer name and moves to SINGLE_CUSTOMER_NAME state.
+    """
+    await update.message.reply_text("لطفاً نام مشتری را وارد کنید: 🧑‍💼")
+    return SINGLE_CUSTOMER_NAME
+
+async def get_single_customer_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Gets the customer's name for single entry and stores it in user_data. 💾
     Prompts for the customer's phone number next.
     """
     context.user_data["customer_name"] = update.message.text
     await update.message.reply_text("لطفاً شماره تلفن مشتری را وارد کنید: 📞")
-    return CUSTOMER_PHONE # Move to the next state to get customer phone ➡️
+    return SINGLE_CUSTOMER_PHONE # Move to the next state to get customer phone ➡️
 
-async def get_customer_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def get_single_customer_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Gets the customer's phone number, performs basic validation, and stores it. ✅
+    Gets the customer's phone number for single entry, performs basic validation, and stores it. ✅
     Prompts for the purchase amount next.
     """
     phone_number = update.message.text.strip()
     # Basic validation for phone number (e.g., only digits, minimum length) 🔢
     if not phone_number.isdigit() or len(phone_number) < 8:
         await update.message.reply_text("شماره تلفن نامعتبر است. لطفاً یک شماره معتبر (فقط اعداد) وارد کنید: 🚫")
-        return CUSTOMER_PHONE # Stay in the same state if validation fails 🔄
-    
+        return SINGLE_CUSTOMER_PHONE  # Stay in the same state if validation fails 🔄
+
     context.user_data["customer_phone"] = phone_number
     await update.message.reply_text("لطفاً مبلغ خرید را (به تومان) وارد کنید: 💲")
-    return PURCHASE_AMOUNT # Move to the next state to get purchase amount ➡️
+    return SINGLE_PURCHASE_AMOUNT  # Move to the next state to get purchase amount ➡️
 
-async def get_purchase_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def get_single_purchase_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Gets the purchase amount, performs validation, and saves the purchase. 💰
+    Gets the purchase amount for single entry, performs validation, and saves the purchase. 💰
     Sends the updated Excel file to the user upon successful recording.
     """
     try:
         amount = int(update.message.text)
         if amount <= 0:
-            raise ValueError # Amount must be positive 📈
+            raise ValueError  # Amount must be positive 📈
     except ValueError:
         await update.message.reply_text("مبلغ نامعتبر است. لطفاً یک عدد مثبت وارد کنید: 🔢")
-        return PURCHASE_AMOUNT # Stay in the same state if validation fails 🔄
+        return SINGLE_PURCHASE_AMOUNT  # Stay in the same state if validation fails 🔄
 
     user_id = update.effective_user.id
     excel_file_path = get_user_excel_path(user_id)
@@ -187,15 +203,91 @@ async def get_purchase_amount(update: Update, context: ContextTypes.DEFAULT_TYPE
     excel_manager.save_purchase(excel_file_path, customer_name, customer_phone, amount)
 
     await update.message.reply_text("خرید با موفقیت ثبت شد! 🎉")
-    # await send_file_to_user(update, context, excel_file_path, caption="فایل اکسل به‌روز شده شما:") # Send the updated Excel file 📤
+    # await send_file_to_user(update, context, excel_file_path, caption="فایل اکسل به‌روز شده شما:") # Optional: Send the updated Excel file 📤
+    return ConversationHandler.END  # End the conversation ✅
+
+
+async def show_bulk_input_format(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Shows user the required format for bulk input and moves to next state to receive the data.
+    """
+    await update.message.reply_text(
+        "لطفاً اطلاعات مشتری‌ها را در قالب زیر وارد کنید (هر خط = یک مشتری):\n\n"
+        "فرمت: نام و نام خانوادگی، شماره تلفن، مبلغ خرید\n"
+        "مثال:\n"
+        "علی رضایی،09351234567،150000\n"
+        "نگار محمدی،09121234567،200000\n\n"
+        "حالا لطفاً لیست مشتری‌ها را ارسال کنید:"
+    )
+    return BULK_PURCHASE_DATA
+
+async def get_bulk_purchase_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Processes multiple customer/purchase entries provided in a single text message.
+    """
+    user_id = update.effective_user.id
+    excel_file_path = get_user_excel_path(user_id)
+    raw_data_lines = update.message.text.strip().split('\n')
+    
+    successful_entries = 0
+    failed_entries = []
+
+    for line_num, line in enumerate(raw_data_lines, 1):
+        line = line.strip()
+        if not line: # Skip empty lines
+            continue
+        
+        parts = line.replace('،', ',').split(',')
+        if len(parts) < 3 or len(parts) > 4: # Expected: name, phone, description (optional), amount
+            failed_entries.append(f"خط {line_num}: فرمت نامعتبر. باید حداقل شامل نام، شماره تلفن، مبلغ باشد. (مثال: نام،شماره،توضیحات،مبلغ)")
+            continue
+
+        customer_name = parts[0].strip()
+        customer_phone = parts[1].strip()
+        description = parts[2].strip() if len(parts) == 4 else "" # Description is optional
+        amount_str = parts[3].strip() if len(parts) == 4 else parts[2].strip() # Amount can be 3rd if no description
+
+        # Basic validation for phone number and amount
+        if not customer_phone.isdigit() or len(customer_phone) < 8:
+            failed_entries.append(f"خط {line_num}: شماره تلفن '{customer_phone}' نامعتبر است.")
+            continue
+        
+        try:
+            amount = int(amount_str)
+            if amount <= 0:
+                raise ValueError
+        except ValueError:
+            failed_entries.append(f"خط {line_num}: مبلغ '{amount_str}' نامعتبر است. باید یک عدد مثبت باشد.")
+            continue
+
+        try:
+            # Call excel_manager to save the customer and purchase details
+            excel_manager.save_purchase_bulk(excel_file_path, customer_name, customer_phone, amount, description) # Assuming description can be passed now
+            successful_entries += 1
+        except Exception as e:
+            logger.error(f"Error saving bulk entry for line {line_num} ('{line}'): {e}")
+            failed_entries.append(f"خط {line_num}: خطا در ذخیره اطلاعات ({e}).")
+
+    response_message = f"عملیات ثبت چند خرید یکجا به پایان رسید. 🎉\n\n"
+    response_message += f"تعداد ورودی‌های موفق: {successful_entries} ✅\n"
+    
+    if failed_entries:
+        response_message += f"تعداد ورودی‌های ناموفق: {len(failed_entries)} ❌\n"
+        response_message += "جزئیات خطاها:\n" + "\n".join(failed_entries)
+    else:
+        response_message += "همه ورودی‌ها با موفقیت ثبت شدند! 🥳"
+
+    await update.message.reply_text(response_message, reply_markup=ReplyKeyboardRemove())
+    # Optional: Send the updated Excel file after bulk processing
+    # await send_file_to_user(update, context, excel_file_path, caption="فایل اکسل به‌روز شده شما:")
     return ConversationHandler.END # End the conversation ✅
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Cancels the ongoing conversation for new purchase registration. ❌
+    Cancels the ongoing conversation. ❌
     """
-    await update.message.reply_text("ثبت خرید لغو شد. 🛑", reply_markup=ReplyKeyboardRemove())
-    return ConversationHandler.END # End the conversation 🔚
+    await update.message.reply_text("عملیات لغو شد. 🛑", reply_markup=ReplyKeyboardRemove())
+    return ConversationHandler.END  # End the conversation 🔚
 
 async def list_customers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -220,9 +312,8 @@ async def list_customers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         await update.message.reply_text("لیست مشتریان شما در فایل اکسل پیوست شده است: 📄")
         await send_file_to_user(update, context, temp_excel_path)
-        os.remove(temp_excel_path) # Delete the temporary file after sending 🚮
+        os.remove(temp_excel_path)  # Delete the temporary file after sending 🚮
         logger.info(f"Temporary customer report deleted: {temp_excel_path} ✅")
-
 
 async def list_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -247,9 +338,8 @@ async def list_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         )
         await update.message.reply_text("تاریخچه تراکنش‌های شما در فایل اکسل پیوست شده است: 📄")
         await send_file_to_user(update, context, temp_excel_path)
-        os.remove(temp_excel_path) # Delete the temporary file after sending 🚮
+        os.remove(temp_excel_path)  # Delete the temporary file after sending 🚮
         logger.info(f"Temporary transaction report deleted: {temp_excel_path} ✅")
-
 
 async def analyze_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -265,7 +355,7 @@ async def analyze_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     df_transactions = excel_manager.get_transactions_data(excel_file_path)
-    df_customers = excel_manager.get_customers_data(excel_file_path) # Load customer data
+    df_customers = excel_manager.get_customers_data(excel_file_path)  # Load customer data
 
     # Ensure there are enough transactions for meaningful analysis (e.g., at least 5) 📉
     if df_transactions.empty or len(df_transactions) < 5:
@@ -275,7 +365,7 @@ async def analyze_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # Perform analysis using data_analyzer module and get the report string 🧠
     # Pass both dataframes to perform_analysis
     analysis_report = data_analyzer.perform_analysis(df_transactions, df_customers)
-    
+
     await update.message.reply_text(f"گزارش تحلیل مشتریان شما:\n{analysis_report}")
 
 async def get_full_excel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -289,7 +379,7 @@ async def get_full_excel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not os.path.exists(excel_file_path):
         await update.message.reply_text("فایل اکسل اصلی شما یافت نشد. لطفاً ابتدا با /new_purchase خریدی را ثبت کنید. 😔")
         return
-    
+
     await update.message.reply_text("فایل اکسل کامل شما در حال ارسال است: 📥")
     await send_file_to_user(update, context, excel_file_path, caption="فایل اکسل کامل شما:")
 
@@ -304,29 +394,35 @@ def main() -> None:
 
     # --- Register Handlers 🔗 ---
 
-    # Command handler for /start ▶️
-    application.add_handler(CommandHandler("start", start))
-    # Message handler for shared contact (phone number) 📞
-    application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
+    # Command handler for /new_purchase (now the entry point for mode selection)
+    # application.add_handler(CommandHandler("new_purchase", new_purchase_entry_point))
 
     # ConversationHandler for /new_purchase command 💬
-    # This allows the bot to guide the user through a multi-step input process. ➡️
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("new_purchase", new_purchase_start)],
+        entry_points=[CommandHandler("new_purchase", new_purchase_entry_point)],
         states={
-            CUSTOMER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_customer_name)],
-            CUSTOMER_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_customer_phone)],
-            PURCHASE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_purchase_amount)],
+            SELECT_ENTRY_MODE: [
+                MessageHandler(filters.Text("ثبت خرید تکی ➕"), select_single_entry),
+                MessageHandler(filters.Text("ثبت چند خرید یکجا 📝"), show_bulk_input_format),
+                MessageHandler(filters.Text("انصراف 🛑"), cancel) 
+            ],
+            SINGLE_CUSTOMER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_single_customer_name)],
+            SINGLE_CUSTOMER_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_single_customer_phone)],
+            SINGLE_PURCHASE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_single_purchase_amount)],
+            BULK_PURCHASE_DATA: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_bulk_purchase_data)],
         },
-        fallbacks=[CommandHandler("cancel", cancel)], # Allows user to cancel the conversation 🛑
+        fallbacks=[CommandHandler("cancel", cancel)],  # Allows user to cancel the conversation 🛑
     )
     application.add_handler(conv_handler)
-
-    # Command handlers for other functionalities 📋
+    
+    # Existing handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
     application.add_handler(CommandHandler("list_customers", list_customers))
     application.add_handler(CommandHandler("list_transactions", list_transactions))
     application.add_handler(CommandHandler("analyze_data", analyze_data))
-    application.add_handler(CommandHandler("get_full_excel", get_full_excel)) # Register the new command
+    application.add_handler(CommandHandler("get_full_excel", get_full_excel))
+
 
     # Run the bot until the user presses Ctrl-C 🏃‍♂️
     logger.info("Bot started polling... 🟢")
