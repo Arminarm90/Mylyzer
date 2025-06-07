@@ -5,6 +5,7 @@ import zipfile  # Import zipfile module for creating zip archives 📚
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 from dotenv import load_dotenv
+import pandas as pd # Import pandas for DataFrame manipulation
 
 # Import custom modules 📚
 import excel_manager
@@ -34,6 +35,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 # --- ConversationHandler States for /new_purchase 💬 ---
 # New states for selecting entry mode and bulk data input
 SELECT_ENTRY_MODE, SINGLE_CUSTOMER_NAME, SINGLE_CUSTOMER_PHONE, SINGLE_PURCHASE_AMOUNT, BULK_PURCHASE_DATA = range(5)
+ANALYZE_DATA_ENTRY, SELECT_SEGMENT_TYPE = range(5, 7) # Start from 5 to avoid conflict with previous states
 
 # --- Helper Functions 🛠️ ---
 def get_user_excel_path(user_id):
@@ -87,7 +89,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "/new_purchase - ثبت خرید جدید 🛒\n"
             "/list_customers - مشاهده لیست مشتریان 👥\n"
             "/list_transactions - مشاهده تاریخچه تراکنش‌ها 💰\n"
-            "/analyze_data - دریافت تحلیل مشتریان 📊\n"
+            "/analyze_data - تحلیل رفتار مشتری 📊\n"
             "/get_full_excel - دریافت فایل اکسل کامل 📄\n",
             reply_markup=ReplyKeyboardRemove()  # Remove the phone number sharing keyboard 🧹
         )
@@ -120,7 +122,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "/new_purchase - ثبت خرید جدید 🛒\n"
             "/list_customers - مشاهده لیست مشتریان 👥\n"
             "/list_transactions - مشاهده تاریخچه تراکنش‌ها 💰\n"
-            "/analyze_data - دریافت تحلیل مشتریان 📊\n"
+            "/analyze_data - تحلیل رفتار مشتری 📊\n"
             "/get_full_excel - دریافت فایل اکسل کامل 📄\n",
             reply_markup=ReplyKeyboardRemove()  # Remove the phone number sharing keyboard 🧹
         )
@@ -308,7 +310,7 @@ async def list_customers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     else:
         # Create a temporary Excel file with customer data 📊
         temp_excel_path = excel_manager.create_temp_excel_report(
-            df_customers, "Customers", user_id, "customers", DATA_DIR
+            df_customers, "Customers", "customers", DATA_DIR
         )
         await update.message.reply_text("لیست مشتریان شما در فایل اکسل پیوست شده است: 📄")
         await send_file_to_user(update, context, temp_excel_path)
@@ -334,39 +336,174 @@ async def list_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     else:
         # Create a temporary Excel file with transaction data 📊
         temp_excel_path = excel_manager.create_temp_excel_report(
-            df_transactions, "Transactions", user_id, "transactions", DATA_DIR
+            df_transactions, "Transactions", "transactions", DATA_DIR
         )
         await update.message.reply_text("تاریخچه تراکنش‌های شما در فایل اکسل پیوست شده است: 📄")
         await send_file_to_user(update, context, temp_excel_path)
         os.remove(temp_excel_path)  # Delete the temporary file after sending 🚮
         logger.info(f"Temporary transaction report deleted: {temp_excel_path} ✅")
 
-async def analyze_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+# async def analyze_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+#     """
+#     Handles the /analyze_data command. 📊
+#     Performs customer analysis based on transaction data and sends the report as text. 📈
+#     """
+#     user_id = update.effective_user.id
+#     excel_file_path = get_user_excel_path(user_id)
+
+#     # Check if the Excel file exists for the user 🔍
+#     if not os.path.exists(excel_file_path):
+#         await update.message.reply_text("فایل داده‌ای برای تحلیل یافت نشد. لطفاً ابتدا با /new_purchase خریدی را ثبت کنید. 😔")
+#         return
+
+#     df_transactions = excel_manager.get_transactions_data(excel_file_path)
+#     df_customers = excel_manager.get_customers_data(excel_file_path)  # Load customer data
+
+#     # Ensure there are enough transactions for meaningful analysis (e.g., at least 5) 📉
+#     if df_transactions.empty or len(df_transactions) < 5:
+#         await update.message.reply_text("تراکنش‌های کافی برای انجام تحلیل معنی‌دار وجود ندارد. لطفاً خریدهای بیشتری را ثبت کنید. 📊")
+#         return
+
+#     # Perform analysis using data_analyzer module and get the report string 🧠
+#     # Pass both dataframes to perform_analysis
+#     analysis_report = data_analyzer.perform_analysis(df_transactions, df_customers)
+
+#     await update.message.reply_text(f"گزارش تحلیل مشتریان شما:\n{analysis_report}")
+# --- Analyze Data Conversation Handlers ---
+async def analyze_data_entry_point(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Handles the /analyze_data command. 📊
-    Performs customer analysis based on transaction data and sends the report as text. 📈
+    Performs customer analysis, stores the full segmented DataFrame,
+    and displays segment buttons.
     """
     user_id = update.effective_user.id
     excel_file_path = get_user_excel_path(user_id)
 
-    # Check if the Excel file exists for the user 🔍
     if not os.path.exists(excel_file_path):
         await update.message.reply_text("فایل داده‌ای برای تحلیل یافت نشد. لطفاً ابتدا با /new_purchase خریدی را ثبت کنید. 😔")
-        return
+        return ConversationHandler.END
 
     df_transactions = excel_manager.get_transactions_data(excel_file_path)
-    df_customers = excel_manager.get_customers_data(excel_file_path)  # Load customer data
+    df_customers = excel_manager.get_customers_data(excel_file_path)
 
-    # Ensure there are enough transactions for meaningful analysis (e.g., at least 5) 📉
     if df_transactions.empty or len(df_transactions) < 5:
-        await update.message.reply_text("تراکنش‌های کافی برای انجام تحلیل معنی‌دار وجود ندارد. لطفاً خریدهای بیشتری را ثبت کنید. 📊")
-        return
+        await update.message.reply_text("تراکنش‌های کافی (حداقل ۵ تراکنش) برای انجام تحلیل معنی‌دار وجود ندارد. لطفاً خریدهای بیشتری را ثبت کنید. �")
+        return ConversationHandler.END
 
-    # Perform analysis using data_analyzer module and get the report string 🧠
-    # Pass both dataframes to perform_analysis
-    analysis_report = data_analyzer.perform_analysis(df_transactions, df_customers)
+    # Perform full segmentation
+    full_segmented_df = data_analyzer.get_full_customer_segments_df(df_transactions, df_customers)
+    if full_segmented_df.empty:
+        await update.message.reply_text("خطا در انجام تحلیل مشتریان. لطفاً از صحت داده‌ها اطمینان حاصل کنید. 🚫")
+        return ConversationHandler.END
+    
+    # Store the full segmented DataFrame in user_data for later access
+    context.user_data['full_segmented_df'] = full_segmented_df
 
-    await update.message.reply_text(f"گزارش تحلیل مشتریان شما:\n{analysis_report}")
+    # Get unique segments to create buttons
+    # Filter out "فاقد تراکنش" if no customers fall into it, or just show all
+    available_segments = full_segmented_df['دسته رفتاری نهایی'].unique().tolist()
+    
+    # Define the desired order for buttons
+    segment_button_order = [
+        "ویژه 🏆", "وفادار ✨", "امید بخش 🌱", "در خطر ⚠️", 
+        "غیر فعال 💤", "از دست رفته 🗑️", "معمولی 🤝", "فاقد تراکنش 🤷"
+    ]
+    
+    # Create keyboard layout - 2 buttons per row for better display
+    keyboard = []
+    current_row = []
+    for segment_label in segment_button_order:
+        # Check if this segment actually exists in the data before creating a button
+        if segment_label.replace(' 🏆', '').replace(' ✨', '').replace(' 🌱', '').replace(' ⚠️', '').replace(' 💤', '').replace(' 🗑️', '').replace(' 🤝', '').replace(' 🤷', '') in available_segments:
+            current_row.append(KeyboardButton(segment_label))
+            if len(current_row) == 2: # 2 buttons per row
+                keyboard.append(current_row)
+                current_row = []
+    if current_row: # Add any remaining buttons
+        keyboard.append(current_row)
+    
+    keyboard.append([KeyboardButton("انصراف 🛑")]) # Add a cancel button
+
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    await update.message.reply_text(
+        "تحلیل مشتریان انجام شد! لطفاً برای مشاهده لیست مشتریان هر بخش، دکمه مربوطه را انتخاب کنید: 👇",
+        reply_markup=reply_markup
+    )
+    return SELECT_SEGMENT_TYPE
+
+async def send_segment_excel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Receives the selected segment type and sends the corresponding Excel file.
+    """
+    selected_segment_button_text = update.message.text
+    # Remove emojis to get the actual segment name for filtering
+    segment_name_map = {
+        "ویژه 🏆": "ویژه",
+        "وفادار ✨": "وفادار",
+        "امید بخش 🌱": "امید بخش",
+        "در خطر ⚠️": "در خطر",
+        "غیر فعال 💤": "غیر فعال",
+        "از دست رفته 🗑️": "از دست رفته",
+        "معمولی 🤝": "معمولی",
+        "فاقد تراکنش 🤷": "فاقد تراکنش",
+        "انصراف 🛑": "انصراف" # Handle cancel here as well for consistency
+    }
+    
+    selected_segment_name = segment_name_map.get(selected_segment_button_text)
+
+    if selected_segment_name == "انصراف":
+        await update.message.reply_text("عملیات تحلیل لغو شد. 🛑", reply_markup=ReplyKeyboardRemove())
+        return ConversationHandler.END
+
+    if selected_segment_name not in context.user_data.get('full_segmented_df', pd.DataFrame())['دسته رفتاری نهایی'].unique().tolist():
+         await update.message.reply_text("بخش انتخاب شده معتبر نیست یا مشتری‌ای در آن بخش یافت نشد. لطفاً دوباره تلاش کنید. 🔄", reply_markup=ReplyKeyboardRemove())
+         return ConversationHandler.END
+
+    full_segmented_df = context.user_data.get('full_segmented_df')
+    if full_segmented_df is None or full_segmented_df.empty:
+        await update.message.reply_text("اطلاعات تحلیل مشتریان موجود نیست. لطفاً دوباره /analyze_data را اجرا کنید. 😔", reply_markup=ReplyKeyboardRemove())
+        return ConversationHandler.END
+
+    # Filter DataFrame for the selected segment
+    segment_df = full_segmented_df[full_segmented_df['دسته رفتاری نهایی'] == selected_segment_name]
+
+    if segment_df.empty:
+        await update.message.reply_text(f"هیچ مشتری در بخش '{selected_segment_name}' یافت نشد. 🤷‍♂️", reply_markup=ReplyKeyboardRemove())
+        return ConversationHandler.END
+    
+    # Columns to include in the output Excel file for each segment, as per "لیست مشتری‌ها.pdf" structure
+    # Customer ID, Name, Phone, Registration Date, Total Transactions, Total Spend
+    # Map these to the Persian column names from data_analyzer.get_full_customer_segments_df output
+    output_columns_map = {
+        'کد مشتری': 'Customer ID',
+        'نام مشتری': 'Name',
+        'شماره تماس': 'Phone',
+        'تاریخ عضویت': 'Registration Date',
+        'تعداد خرید': 'Total Transactions', # This is Frequency from RFM
+        'مجموع خرید': 'Total Spend' # This is Monetary from RFM
+    }
+    
+    # Ensure all required columns exist in segment_df before selecting
+    # Some columns might not exist if data_analyzer.py or excel_manager.py outputs changed
+    present_columns = [col for col in output_columns_map.keys() if col in segment_df.columns]
+    
+    # Select and rename columns for the output file
+    segment_output_df = segment_df[present_columns].rename(columns=output_columns_map)
+
+    # Generate temporary Excel file
+    user_id = update.effective_user.id
+    temp_excel_path = excel_manager.create_temp_excel_report(
+        segment_output_df, selected_segment_name, f"customer_segment_{selected_segment_name}", DATA_DIR
+    )
+    
+    await update.message.reply_text(f"لیست مشتریان بخش '{selected_segment_name}' در فایل اکسل پیوست شده است: 📄", reply_markup=ReplyKeyboardRemove())
+    await send_file_to_user(update, context, temp_excel_path, caption=f"مشتریان بخش {selected_segment_name}")
+    
+    os.remove(temp_excel_path) # Clean up the temporary file
+    logger.info(f"Temporary segment report deleted: {temp_excel_path} ✅")
+
+    return ConversationHandler.END
+
 
 async def get_full_excel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -412,15 +549,36 @@ def main() -> None:
             BULK_PURCHASE_DATA: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_bulk_purchase_data)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],  # Allows user to cancel the conversation 🛑
+        allow_reentry=True,  # اجازه ورود چندباره
+        per_message=False,   # فقط بر اساس وضعیت فعلی رفتار کن
     )
     application.add_handler(conv_handler)
+    
+    # ConversationHandler for /analyze_data command 📊
+    analyze_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("analyze_data", analyze_data_entry_point)],
+        states={
+            SELECT_SEGMENT_TYPE: [
+                # Match all segment buttons and handle with send_segment_excel
+                MessageHandler(filters.Text([
+                    "ویژه 🏆", "وفادار ✨", "امید بخش 🌱", "در خطر ⚠️", 
+                    "غیر فعال 💤", "از دست رفته 🗑️", "معمولی 🤝", "فاقد تراکنش 🤷",
+                    "انصراف 🛑" # Also allow cancel from this state
+                ]), send_segment_excel),
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        allow_reentry=True,
+        per_message=False,
+    )
+    application.add_handler(analyze_conv_handler)
     
     # Existing handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.CONTACT, handle_contact))
     application.add_handler(CommandHandler("list_customers", list_customers))
     application.add_handler(CommandHandler("list_transactions", list_transactions))
-    application.add_handler(CommandHandler("analyze_data", analyze_data))
+    # application.add_handler(CommandHandler("analyze_data", analyze_data))
     application.add_handler(CommandHandler("get_full_excel", get_full_excel))
 
 

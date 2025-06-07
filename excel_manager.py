@@ -193,18 +193,67 @@ def save_purchase_bulk(file_path, customer_name, customer_phone, amount, descrip
 def get_customers_data(file_path):
     """
     Reads the 'Customers' sheet from the Excel file and returns it as a pandas DataFrame. 👥
+    Additionally, calculates 'Total Transactions' and 'Total Spend' from the 'Transactions' sheet
+    and merges them with the customer data.
     Returns an empty DataFrame if the file or sheet is not found, or an error occurs. 🚫
     """
     try:
-        # Use header=0 to indicate the first row is the header 🏷️
-        df = pd.read_excel(file_path, sheet_name="Customers", header=0)
-        return df
+        # Read Customers sheet 🏷️
+        df_customers = pd.read_excel(file_path, sheet_name="Customers", header=0)
     except FileNotFoundError:
         print(f"Error: Excel file not found at {file_path}. ⚠️")
         return pd.DataFrame(columns=["کد مشتری", "نام", "شماره تماس", "تاریخ عضویت", "توضیحات"])
     except Exception as e:
         print(f"Error reading Customers sheet from {file_path}: {e} ❌")
         return pd.DataFrame(columns=["کد مشتری", "نام", "شماره تماس", "تاریخ عضویت", "توضیحات"])
+
+    try:
+        # Read Transactions sheet 💰
+        df_transactions = pd.read_excel(file_path, sheet_name="Transactions", header=0)
+    except Exception as e:
+        print(f"Warning: Could not read Transactions sheet from {file_path}. Assuming no transactions. {e} ⚠️")
+        df_transactions = pd.DataFrame(columns=["شناسه مشتری", "تاریخ فاکتور", "شماره فاکتور", "مبلغ (تومان)"])
+    
+    # Calculate Total Transactions and Total Spend from transactions data 📈
+    if not df_transactions.empty:
+        # Ensure 'مبلغ (تومان)' is numeric for sum calculation
+        df_transactions['مبلغ (تومان)'] = pd.to_numeric(df_transactions['مبلغ (تومان)'], errors='coerce').fillna(0)
+
+        customer_summary = df_transactions.groupby('شناسه مشتری').agg(
+            Total_Transactions=('شماره فاکتور', 'count'), # Count of transactions
+            Total_Spend=('مبلغ (تومان)', 'sum') # Sum of amounts
+        ).reset_index()
+        
+        # Merge this summary with the customers DataFrame
+        # 'شناسه مشتری' from transactions matches 'کد مشتری' in customers
+        df_customers = pd.merge(
+            df_customers,
+            customer_summary,
+            left_on='کد مشتری',
+            right_on='شناسه مشتری',
+            how='left'
+        )
+        # Fill NaN values for customers with no transactions
+        df_customers['Total_Transactions'].fillna(0, inplace=True)
+        df_customers['Total_Spend'].fillna(0, inplace=True)
+
+        # Drop the redundant 'شناسه مشتری' column from the merge
+        if 'شناسه مشتری' in df_customers.columns:
+            df_customers.drop(columns=['شناسه مشتری'], inplace=True)
+        
+        # Rename the new columns to Persian names as requested
+        df_customers.rename(columns={
+            'Total_Transactions': 'تعداد کل تراکنش‌ها',
+            'Total_Spend': 'مجموع مبلغ خریدها'
+        }, inplace=True)
+
+    else:
+        # If no transactions data, add these columns with default values (0)
+        df_customers['تعداد کل تراکنش‌ها'] = 0
+        df_customers['مجموع مبلغ خریدها'] = 0
+
+
+    return df_customers
 
 def get_transactions_data(file_path):
     """
@@ -222,7 +271,7 @@ def get_transactions_data(file_path):
         print(f"Error reading Transactions sheet from {file_path}: {e} ❌")
         return pd.DataFrame(columns=["شناسه مشتری", "تاریخ فاکتور", "شماره فاکتور", "مبلغ (تومان)"])
 
-def create_temp_excel_report(df: pd.DataFrame, sheet_name: str, user_id: int, report_type: str, data_dir: str) -> str:
+def create_temp_excel_report(df: pd.DataFrame, sheet_name: str, report_type: str, data_dir: str) -> str:
     """
     Creates a temporary Excel file containing the given DataFrame in a single sheet. 📊
     The filename includes the user ID, report type, and current date (Gregorian). 🗓️
@@ -240,7 +289,7 @@ def create_temp_excel_report(df: pd.DataFrame, sheet_name: str, user_id: int, re
     # Use standard datetime for the date in the temporary file name 🗓️
     today_date_str = jdatetime.date.today().strftime("%Y-%m-%d")
     # Example filename: user_data/12345_customers_2024-06-03.xlsx 📄
-    temp_file_name = f"{user_id}_{report_type}_{today_date_str}.xlsx"
+    temp_file_name = f"{report_type}_{today_date_str}.xlsx"
     temp_file_path = os.path.join(data_dir, temp_file_name)
 
     wb = Workbook()
