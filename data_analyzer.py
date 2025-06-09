@@ -177,7 +177,7 @@ def assign_segment(row):
     R, F, M = row['R_Score'], row['F_Score'], row['M_Score']
     tam_status = row['TAM_Status']
 
-    if R == 5 and F == 5 and M == 5 and tam_status == 'Active':
+    if R >= 4 and F >= 4 and M >= 4 and tam_status == 'Active':
         return "ویژه" # Special/Champion
     elif R == 5 and F >= 3 and tam_status == 'Active':
         return "وفادار" # Loyal

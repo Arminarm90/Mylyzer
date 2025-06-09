@@ -2,8 +2,8 @@
 import logging
 import os
 import zipfile  # Import zipfile module for creating zip archives 📚
-from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup # Import Inline buttons
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler, CallbackQueryHandler # Import CallbackQueryHandler
 from dotenv import load_dotenv
 import pandas as pd # Import pandas for DataFrame manipulation
 
@@ -11,8 +11,18 @@ import pandas as pd # Import pandas for DataFrame manipulation
 import excel_manager
 import user_manager
 import data_analyzer
+from user_manager import save_notification, has_notification_been_sent, get_chat_id
 
+# charts
+from chart_utils import create_rfm_pie_chart, create_tam_bar_chart
+from data_analyzer import get_full_customer_segments_df
 
+# scheduler
+from scheduler import start_scheduler
+
+# notifications
+from notifications import check_and_notify_vip_after_purchase
+# load env
 load_dotenv()
 
 
@@ -70,7 +80,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     user = update.effective_user
     logger.info(f"User {user.id} ({user.first_name}) started the bot. ▶️")
+    
+    # Get Chat ID
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
 
+    os.makedirs(f"user_data/{user_id}", exist_ok=True)
+    with open(f"user_data/{user_id}/chat_id.txt", "w", encoding="utf-8") as f:
+        f.write(str(chat_id))
+    
     # Check if the user's phone number is already saved ✅
     if not user_manager.get_user_phone(user.id):
         # If not, request the phone number using a special keyboard button 📱
@@ -89,7 +107,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "/new_purchase - ثبت خرید جدید 🛒\n"
             "/list_customers - مشاهده لیست مشتریان 👥\n"
             "/list_transactions - مشاهده تاریخچه تراکنش‌ها 💰\n"
-            "/analyze_data - تحلیل رفتار مشتری 📊\n"
+            "/analyze_data - تحلیل رفتار مشتریان 📊\n"
             "/get_full_excel - دریافت فایل اکسل کامل 📄\n",
             reply_markup=ReplyKeyboardRemove()  # Remove the phone number sharing keyboard 🧹
         )
@@ -122,7 +140,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "/new_purchase - ثبت خرید جدید 🛒\n"
             "/list_customers - مشاهده لیست مشتریان 👥\n"
             "/list_transactions - مشاهده تاریخچه تراکنش‌ها 💰\n"
-            "/analyze_data - تحلیل رفتار مشتری 📊\n"
+            "/analyze_data - تحلیل رفتار مشتریان 📊\n"
             "/get_full_excel - دریافت فایل اکسل کامل 📄\n",
             reply_markup=ReplyKeyboardRemove()  # Remove the phone number sharing keyboard 🧹
         )
@@ -203,7 +221,7 @@ async def get_single_purchase_amount(update: Update, context: ContextTypes.DEFAU
 
     # Call excel_manager to save the purchase details ✍️
     excel_manager.save_purchase(excel_file_path, customer_name, customer_phone, amount)
-
+    await check_and_notify_vip_after_purchase(user_id, context, update.effective_chat.id)
     await update.message.reply_text("خرید با موفقیت ثبت شد! 🎉")
     # await send_file_to_user(update, context, excel_file_path, caption="فایل اکسل به‌روز شده شما:") # Optional: Send the updated Excel file 📤
     return ConversationHandler.END  # End the conversation ✅
@@ -280,6 +298,8 @@ async def get_bulk_purchase_data(update: Update, context: ContextTypes.DEFAULT_T
         response_message += "همه ورودی‌ها با موفقیت ثبت شدند! 🥳"
 
     await update.message.reply_text(response_message, reply_markup=ReplyKeyboardRemove())
+    await check_and_notify_vip_after_purchase(user_id, context, update.effective_chat.id)
+
     # Optional: Send the updated Excel file after bulk processing
     # await send_file_to_user(update, context, excel_file_path, caption="فایل اکسل به‌روز شده شما:")
     return ConversationHandler.END # End the conversation ✅
@@ -369,12 +389,13 @@ async def list_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 #     analysis_report = data_analyzer.perform_analysis(df_transactions, df_customers)
 
 #     await update.message.reply_text(f"گزارش تحلیل مشتریان شما:\n{analysis_report}")
+
 # --- Analyze Data Conversation Handlers ---
 async def analyze_data_entry_point(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Handles the /analyze_data command. 📊
+    Handles the /customer_behavior_analysis command. 📊
     Performs customer analysis, stores the full segmented DataFrame,
-    and displays segment buttons.
+    and displays segment buttons as ReplyKeyboardMarkup (single column).
     """
     user_id = update.effective_user.id
     excel_file_path = get_user_excel_path(user_id)
@@ -387,7 +408,7 @@ async def analyze_data_entry_point(update: Update, context: ContextTypes.DEFAULT
     df_customers = excel_manager.get_customers_data(excel_file_path)
 
     if df_transactions.empty or len(df_transactions) < 5:
-        await update.message.reply_text("تراکنش‌های کافی (حداقل ۵ تراکنش) برای انجام تحلیل معنی‌دار وجود ندارد. لطفاً خریدهای بیشتری را ثبت کنید. �")
+        await update.message.reply_text("تراکنش‌های کافی (حداقل ۵ تراکنش) برای انجام تحلیل معنی‌دار وجود ندارد. لطفاً خریدهای بیشتری را ثبت کنید. 📊")
         return ConversationHandler.END
 
     # Perform full segmentation
@@ -396,47 +417,51 @@ async def analyze_data_entry_point(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text("خطا در انجام تحلیل مشتریان. لطفاً از صحت داده‌ها اطمینان حاصل کنید. 🚫")
         return ConversationHandler.END
     
+       
     # Store the full segmented DataFrame in user_data for later access
     context.user_data['full_segmented_df'] = full_segmented_df
-
-    # Get unique segments to create buttons
-    # Filter out "فاقد تراکنش" if no customers fall into it, or just show all
-    available_segments = full_segmented_df['دسته رفتاری نهایی'].unique().tolist()
     
-    # Define the desired order for buttons
-    segment_button_order = [
-        "ویژه 🏆", "وفادار ✨", "امید بخش 🌱", "در خطر ⚠️", 
-        "غیر فعال 💤", "از دست رفته 🗑️", "معمولی 🤝", "فاقد تراکنش 🤷"
+    # Define the desired order for buttons and their emojis, and their corresponding segment names
+    # All segments are always displayed, regardless of whether they have customers.
+    segment_button_data = [
+        ("ویژه 🏆", "ویژه"), 
+        ("وفادار ✨", "وفادار"), 
+        ("امید بخش 🌱", "امید بخش"), 
+        ("در خطر ⚠️", "در خطر"), 
+        ("غیر فعال 💤", "غیر فعال"), 
+        ("از دست رفته 🗑️", "از دست رفته"), 
+        ("معمولی 🤝", "معمولی"), 
+        ("فاقد تراکنش 🤷", "فاقد تراکنش"), # Include this segment always
+        ("📊 RFM Pie Chart", "RFM Pie Chart"),
+        ("📊 TAM Bar Chart", "TAM Bar Chart")
+        
     ]
     
-    # Create keyboard layout - 2 buttons per row for better display
+    # Create keyboard layout - one button per row for stacked appearance
     keyboard = []
-    current_row = []
-    for segment_label in segment_button_order:
-        # Check if this segment actually exists in the data before creating a button
-        if segment_label.replace(' 🏆', '').replace(' ✨', '').replace(' 🌱', '').replace(' ⚠️', '').replace(' 💤', '').replace(' 🗑️', '').replace(' 🤝', '').replace(' 🤷', '') in available_segments:
-            current_row.append(KeyboardButton(segment_label))
-            if len(current_row) == 2: # 2 buttons per row
-                keyboard.append(current_row)
-                current_row = []
-    if current_row: # Add any remaining buttons
-        keyboard.append(current_row)
+    for button_text, segment_name in segment_button_data:
+        keyboard.append([KeyboardButton(button_text)]) # Each button in its own row
     
-    keyboard.append([KeyboardButton("انصراف 🛑")]) # Add a cancel button
+    # Add a cancel button in a separate row
+    keyboard.append([KeyboardButton("انصراف 🛑")]) 
 
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True) # Use ReplyKeyboardMarkup
+
     await update.message.reply_text(
-        "تحلیل مشتریان انجام شد! لطفاً برای مشاهده لیست مشتریان هر بخش، دکمه مربوطه را انتخاب کنید: 👇",
+        "تحلیل رفتار مشتری انجام شد! لطفاً برای مشاهده لیست مشتریان هر بخش، دکمه مربوطه را انتخاب کنید: 👇",
         reply_markup=reply_markup
     )
     return SELECT_SEGMENT_TYPE
 
 async def send_segment_excel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Receives the selected segment type and sends the corresponding Excel file.
+    Receives the selected segment type from Reply Keyboard message
+    and sends the corresponding Excel file or a message explaining conditions.
     """
-    selected_segment_button_text = update.message.text
-    # Remove emojis to get the actual segment name for filtering
+    # Get the selected segment name directly from the message text
+    selected_segment_button_text = update.message.text 
+
+    # Map button text (with emoji) back to pure segment name
     segment_name_map = {
         "ویژه 🏆": "ویژه",
         "وفادار ✨": "وفادار",
@@ -446,34 +471,64 @@ async def send_segment_excel(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "از دست رفته 🗑️": "از دست رفته",
         "معمولی 🤝": "معمولی",
         "فاقد تراکنش 🤷": "فاقد تراکنش",
-        "انصراف 🛑": "انصراف" # Handle cancel here as well for consistency
+        "انصراف 🛑": "انصراف" 
     }
-    
     selected_segment_name = segment_name_map.get(selected_segment_button_text)
+
+
+    # Define descriptions and conditions for each segment
+    segment_info = {
+        "ویژه": {
+            "description": "مشتریانی با بالاترین ارزش، فعال با خریدهای زیاد و گران. این مشتریان حیاتی هستند و باید تشویق و حفظ شوند. 💎"        },
+        "وفادار": {
+            "description": "مشتریان فعال با سابقه خرید خوب و مناسب برای پاداش و ارتباط مداوم. ✨"
+        },
+        "امید بخش": {
+            "description": "تازه‌واردها یا مشتریانی با پتانسیل بالا که نیاز به پرورش و انگیزش دارند. 🌱",
+        },
+        "در خطر": {
+            "description": "مشتریانی که قبلاً خوب بوده‌اند اما مدتی است خرید نکرده‌اند یا کمتر فعال بوده‌اند و در معرض خطر ریزش هستند. ⚠️"
+        },
+        "غیر فعال": {
+            "description": "مشتریانی که برای مدت طولانی هیچ خریدی نداشته‌اند. 💤"
+        },
+        "از دست رفته": {
+            "description": "مشتریانی که به احتمال زیاد دیگر برنمی‌گردند. 🗑️"
+        },
+        "معمولی": {
+            "description": "سایر مشتریان که در دسته‌بندی‌های دیگر قرار نمی‌گیرند. 🤝"
+        },
+        "فاقد تراکنش": {
+            "description": "مشتریانی که هیچ تراکنشی در سیستم ثبت نکرده‌اند. 🤷"
+        }
+    }
 
     if selected_segment_name == "انصراف":
         await update.message.reply_text("عملیات تحلیل لغو شد. 🛑", reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
-    if selected_segment_name not in context.user_data.get('full_segmented_df', pd.DataFrame())['دسته رفتاری نهایی'].unique().tolist():
-         await update.message.reply_text("بخش انتخاب شده معتبر نیست یا مشتری‌ای در آن بخش یافت نشد. لطفاً دوباره تلاش کنید. 🔄", reply_markup=ReplyKeyboardRemove())
-         return ConversationHandler.END
-
     full_segmented_df = context.user_data.get('full_segmented_df')
     if full_segmented_df is None or full_segmented_df.empty:
-        await update.message.reply_text("اطلاعات تحلیل مشتریان موجود نیست. لطفاً دوباره /analyze_data را اجرا کنید. 😔", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text("اطلاعات تحلیل مشتریان موجود نیست. لطفاً دوباره /customer_behavior_analysis را اجرا کنید. 😔", reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
 
     # Filter DataFrame for the selected segment
     segment_df = full_segmented_df[full_segmented_df['دسته رفتاری نهایی'] == selected_segment_name]
 
     if segment_df.empty:
-        await update.message.reply_text(f"هیچ مشتری در بخش '{selected_segment_name}' یافت نشد. 🤷‍♂️", reply_markup=ReplyKeyboardRemove())
+        # Get description and condition for the selected segment
+        info = segment_info.get(selected_segment_name, {
+            "description": "توضیحات این بخش در دسترس نیست.",
+        })
+        response_message = (
+            f"متاسفانه هیچ مشتری‌ای در بخش '{selected_segment_name}' یافت نشد. \n\n"
+            f"*{info['description']}*\n"
+            "برای مشاهده تحلیل این بخش، مشتریان شما باید به شرایط فوق دست یابند. 📈"
+        )
+        await update.message.reply_text(response_message, parse_mode='Markdown', reply_markup=ReplyKeyboardRemove())
         return ConversationHandler.END
     
     # Columns to include in the output Excel file for each segment, as per "لیست مشتری‌ها.pdf" structure
-    # Customer ID, Name, Phone, Registration Date, Total Transactions, Total Spend
-    # Map these to the Persian column names from data_analyzer.get_full_customer_segments_df output
     output_columns_map = {
         'کد مشتری': 'Customer ID',
         'نام مشتری': 'Name',
@@ -483,11 +538,7 @@ async def send_segment_excel(update: Update, context: ContextTypes.DEFAULT_TYPE)
         'مجموع خرید': 'Total Spend' # This is Monetary from RFM
     }
     
-    # Ensure all required columns exist in segment_df before selecting
-    # Some columns might not exist if data_analyzer.py or excel_manager.py outputs changed
     present_columns = [col for col in output_columns_map.keys() if col in segment_df.columns]
-    
-    # Select and rename columns for the output file
     segment_output_df = segment_df[present_columns].rename(columns=output_columns_map)
 
     # Generate temporary Excel file
@@ -520,14 +571,74 @@ async def get_full_excel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.reply_text("فایل اکسل کامل شما در حال ارسال است: 📥")
     await send_file_to_user(update, context, excel_file_path, caption="فایل اکسل کامل شما:")
 
+# Pie chart handler
+async def send_rfm_pie_chart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    file_path = get_user_excel_path(user_id)
 
+    def load_data_from_excel(excel_path):
+        df_customers = pd.read_excel(excel_path, sheet_name='Customers')
+        df_transactions = pd.read_excel(excel_path, sheet_name='Transactions')
+        return df_customers, df_transactions
+    
+    if not os.path.exists(file_path):
+        await update.message.reply_text("❌ شما هنوز اطلاعات خرید ثبت نکردید.")
+        return
+
+    df_customers, df_transactions = load_data_from_excel(file_path)
+    df_segmented = get_full_customer_segments_df(df_transactions, df_customers)
+
+    if df_segmented.empty:
+        await update.message.reply_text("هیچ داده‌ای برای تحلیل یافت نشد.")
+        return
+
+    pie_chart_buffer = create_rfm_pie_chart(df_segmented)
+
+    await update.message.reply_photo(
+        photo=pie_chart_buffer,
+        caption="📊 نمودار درصدی دسته‌های رفتاری مشتریان"
+    )
+   
+# Bar chart handler
+async def send_tam_bar_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    file_path = get_user_excel_path(user_id)
+
+    def load_data_from_excel(excel_path):
+        df_customers = pd.read_excel(excel_path, sheet_name='Customers')
+        df_transactions = pd.read_excel(excel_path, sheet_name='Transactions')
+        return df_customers, df_transactions
+    
+    if not os.path.exists(file_path):
+        await update.message.reply_text("❌ اطلاعات خریدی ثبت نشده.")
+        return
+
+    df_customers, df_transactions = load_data_from_excel(file_path)
+    df_segmented = get_full_customer_segments_df(df_transactions, df_customers)
+
+    if df_segmented.empty:
+        await update.message.reply_text("داده‌ای برای تحلیل یافت نشد.")
+        return
+
+    chart_buffer = create_tam_bar_chart(df_segmented)
+
+    await update.message.reply_photo(
+        photo=chart_buffer,
+        caption="📊 نمودار وضعیت‌های زمانی TAM"
+    )
+       
+# Start scheduler
+async def post_init(application):
+    start_scheduler(application)
+
+    
 def main() -> None:
     """
     Main function to set up and run the Telegram bot. 🚀
     Initializes the Application, adds handlers for commands and messages, and starts polling.
     """
     # Create the Application and pass it your bot's token. 🤖
-    application = Application.builder().token(BOT_TOKEN).build()
+    application = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     # --- Register Handlers 🔗 ---
 
@@ -565,6 +676,10 @@ def main() -> None:
                     "غیر فعال 💤", "از دست رفته 🗑️", "معمولی 🤝", "فاقد تراکنش 🤷",
                     "انصراف 🛑" # Also allow cancel from this state
                 ]), send_segment_excel),
+                
+                MessageHandler(filters.Text("📊 RFM Pie Chart"), send_rfm_pie_chart),
+                MessageHandler(filters.Text("📊 TAM Bar Chart"), send_tam_bar_chart),
+
             ]
         },
         fallbacks=[CommandHandler("cancel", cancel)],
@@ -585,6 +700,8 @@ def main() -> None:
     # Run the bot until the user presses Ctrl-C 🏃‍♂️
     logger.info("Bot started polling... 🟢")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
+    
+
 
 if __name__ == "__main__":
     main()
