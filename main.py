@@ -145,10 +145,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"خوش آمدید {user.first_name}! 😊\n"
             "می‌توانید از دستورات زیر استفاده کنید:\n"
             "/new_purchase - ثبت خرید جدید 🛒\n"
-            "/list_customers - مشاهده لیست مشتریان 👥\n"
-            "/list_transactions - مشاهده تاریخچه تراکنش‌ها 💰\n"
-            "/analyze_data - تحلیل رفتار مشتریان 📊\n"
-            "/get_full_excel - دریافت فایل اکسل کامل 📄\n",
+            "/list_customers - لیست مشتریان 👥\n"
+            "/list_transactions - تاریخچه تراکنش‌ها 💰\n"
+            "/analyze_data - تحلیل رفتار مشتریان 📊\n",
+            # "/get_full_excel - دریافت فایل اکسل کامل 📄\n",
             reply_markup=ReplyKeyboardRemove(),  # Remove the phone number sharing keyboard 🧹
         )
 
@@ -183,10 +183,10 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(
             "اکنون می‌توانید از دستورات زیر استفاده کنید:\n"
             "/new_purchase - ثبت خرید جدید 🛒\n"
-            "/list_customers - مشاهده لیست مشتریان 👥\n"
-            "/list_transactions - مشاهده تاریخچه تراکنش‌ها 💰\n"
-            "/analyze_data - تحلیل رفتار مشتریان 📊\n"
-            "/get_full_excel - دریافت فایل اکسل کامل 📄\n",
+            "/list_customers - لیست مشتریان 👥\n"
+            "/list_transactions - تاریخچه تراکنش‌ها 💰\n"
+            "/analyze_data - تحلیل رفتار مشتریان 📊\n",
+            # "/get_full_excel - دریافت فایل اکسل کامل 📄\n",
             reply_markup=ReplyKeyboardRemove(),  # Remove the phone number sharing keyboard 🧹
         )
     else:
@@ -210,9 +210,9 @@ async def new_purchase_entry_point(
 
     keyboard = [
         [KeyboardButton("ثبت خرید تکی ➕")],
-        [KeyboardButton("ثبت چند خرید یکجا 📝")],
-        [KeyboardButton("ثبت خرید با فایل 📄")],
-        [KeyboardButton("انصراف 🛑")],
+        [KeyboardButton("ثبت چند خرید (وزودی متنی) 📝")],
+        [KeyboardButton("ثبت خرید با فایل اکسل 📄")],
+        [KeyboardButton("خروج ⬅️")],
     ]
     reply_markup = ReplyKeyboardMarkup(
         keyboard, resize_keyboard=True, one_time_keyboard=True
@@ -597,79 +597,81 @@ async def list_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 # --- Analyze Data Conversation Handlers ---
-async def analyze_data_entry_point(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> int:
-    """
-    Handles the /customer_behavior_analysis command. 📊
-    Performs customer analysis, stores the full segmented DataFrame,
-    and displays segment buttons as ReplyKeyboardMarkup (single column).
-    """
+SELECT_ANALYSIS_MENU = 4000
+SELECT_SEGMENT_TYPE = 4001
+SELECT_CHART_TYPE = 4002
+
+async def analyze_data_entry_point(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
     excel_file_path = get_user_excel_path(user_id)
 
     if not os.path.exists(excel_file_path):
-        await update.message.reply_text(
-            "فایل داده‌ای برای تحلیل یافت نشد. لطفاً ابتدا با /new_purchase خریدی را ثبت کنید. 😔"
-        )
+        await update.message.reply_text("فایل داده‌ای برای تحلیل یافت نشد. لطفاً ابتدا با /new_purchase خریدی را ثبت کنید. 😔")
         return ConversationHandler.END
 
     df_transactions = excel_manager.get_transactions_data(excel_file_path)
     df_customers = excel_manager.get_customers_data(excel_file_path)
 
     if df_transactions.empty or len(df_transactions) < 5:
-        await update.message.reply_text(
-            "تراکنش‌های کافی (حداقل ۵ تراکنش) برای انجام تحلیل معنی‌دار وجود ندارد. لطفاً خریدهای بیشتری را ثبت کنید. 📊"
-        )
+        await update.message.reply_text("تراکنش‌های کافی (حداقل ۵ تراکنش) برای انجام تحلیل معنی‌دار وجود ندارد. لطفاً خریدهای بیشتری را ثبت کنید. 📋")
         return ConversationHandler.END
 
-    # Perform full segmentation
-    full_segmented_df = data_analyzer.get_full_customer_segments_df(
-        df_transactions, df_customers
-    )
+    full_segmented_df = data_analyzer.get_full_customer_segments_df(df_transactions, df_customers)
     if full_segmented_df.empty:
-        await update.message.reply_text(
-            "خطا در انجام تحلیل مشتریان. لطفاً از صحت داده‌ها اطمینان حاصل کنید. 🚫"
-        )
+        await update.message.reply_text("خطا در انجام تحلیل مشتریان. لطفاً از صحت داده‌ها اطمینان حاصل کنید. ⛔")
         return ConversationHandler.END
 
-    # Store the full segmented DataFrame in user_data for later access
     context.user_data["full_segmented_df"] = full_segmented_df
 
-    # Define the desired order for buttons and their emojis, and their corresponding segment names
-    # All segments are always displayed, regardless of whether they have customers.
-    segment_button_data = [
-        ("ویژه 🏆", "ویژه"),
-        ("وفادار ✨", "وفادار"),
-        ("امید بخش 🌱", "امید بخش"),
-        ("در خطر ⚠️", "در خطر"),
-        ("غیر فعال 💤", "غیر فعال"),
-        ("از دست رفته 🗑️", "از دست رفته"),
-        ("معمولی 🤝", "معمولی"),
-        ("فاقد تراکنش 🤷", "فاقد تراکنش"),  # Include this segment always
-        ("📊 RFM Pie Chart", "RFM Pie Chart"),
-        ("📊 TAM Bar Chart", "TAM Bar Chart"),
+    keyboard = [
+        [KeyboardButton("👥 تحلیل"), KeyboardButton("📊 گزارش")],  # کنار هم
+        [KeyboardButton("⬅️ خروج")]  # زیرش
     ]
 
-    # Create keyboard layout - one button per row for stacked appearance
-    keyboard = []
-    for button_text, segment_name in segment_button_data:
-        keyboard.append([KeyboardButton(button_text)])  # Each button in its own row
-
-    # Add a cancel button in a separate row
-    keyboard.append([KeyboardButton("انصراف 🛑")])
-
-    reply_markup = ReplyKeyboardMarkup(
-        keyboard, resize_keyboard=True, one_time_keyboard=True
-    )  # Use ReplyKeyboardMarkup
-
     await update.message.reply_text(
-        "تحلیل رفتار مشتری انجام شد! لطفاً برای مشاهده لیست مشتریان هر بخش، دکمه مربوطه را انتخاب کنید: 👇",
-        reply_markup=reply_markup,
+        "چه کاری می‌خوای انجام بدی؟ 👇",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
+    return SELECT_ANALYSIS_MENU
+
+async def handle_analysis_menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    text = update.message.text.strip()
+
+    if text == "👥 تحلیل":
+        return await show_segment_buttons(update, context)
+    elif text == "📊 گزارش":
+        return await show_chart_buttons(update, context)
+    elif text == "⬅️ خروج":
+        await update.message.reply_text("از منوی تحلیل خارج شدی. 📛", reply_markup=ReplyKeyboardRemove())
+        return ConversationHandler.END
+    else:
+        await update.message.reply_text("لطفاً یکی از گزینه‌های منو را انتخاب کن.")
+        return SELECT_ANALYSIS_MENU
+
+async def show_segment_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    keyboard = [
+        [KeyboardButton("ویژه 🏆")],
+        [KeyboardButton("وفادار ✨")],
+        [KeyboardButton("امید بخش 🌱")],
+        [KeyboardButton("در خطر ⚠️")],
+        [KeyboardButton("غیر فعال 💩")],
+        [KeyboardButton("از دست رفته 🗑️")],
+        [KeyboardButton("معمولی 🤝")],
+        [KeyboardButton("فاقد تراکنش 🤷")],
+        [KeyboardButton("🔙 بازگشت")]
+    ]
+    await update.message.reply_text("دسته‌بندی مد نظرت رو انتخاب کن:", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
     return SELECT_SEGMENT_TYPE
 
-
+async def show_chart_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    keyboard = [
+        [KeyboardButton("📊 نمودار دسته‌های رفتاری")],
+        [KeyboardButton("📈 نمودار فعالیت زمانی")],
+        [KeyboardButton("🔙 بازگشت")]
+    ]
+    await update.message.reply_text("کدوم نمودار رو می‌خوای ببینی؟", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+    return SELECT_CHART_TYPE
+    
 async def send_segment_excel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
     Receives the selected segment type from Reply Keyboard message
@@ -688,7 +690,7 @@ async def send_segment_excel(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "از دست رفته 🗑️": "از دست رفته",
         "معمولی 🤝": "معمولی",
         "فاقد تراکنش 🤷": "فاقد تراکنش",
-        "انصراف 🛑": "انصراف",
+        "خروج ⬅️": "خروج",
     }
     selected_segment_name = segment_name_map.get(selected_segment_button_text)
 
@@ -718,7 +720,7 @@ async def send_segment_excel(update: Update, context: ContextTypes.DEFAULT_TYPE)
         },
     }
 
-    if selected_segment_name == "انصراف":
+    if selected_segment_name == "خروج":
         await update.message.reply_text(
             "عملیات تحلیل لغو شد. 🛑", reply_markup=ReplyKeyboardRemove()
         )
@@ -727,7 +729,7 @@ async def send_segment_excel(update: Update, context: ContextTypes.DEFAULT_TYPE)
     full_segmented_df = context.user_data.get("full_segmented_df")
     if full_segmented_df is None or full_segmented_df.empty:
         await update.message.reply_text(
-            "اطلاعات تحلیل مشتریان موجود نیست. لطفاً دوباره /customer_behavior_analysis را اجرا کنید. 😔",
+            "اطلاعات تحلیل مشتریان موجود نیست. لطفاً دوباره /analyze_data را اجرا کنید. 😔",
             reply_markup=ReplyKeyboardRemove(),
         )
         return ConversationHandler.END
@@ -751,9 +753,10 @@ async def send_segment_excel(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "برای مشاهده تحلیل این بخش، مشتریان شما باید به شرایط فوق دست یابند. 📈"
         )
         await update.message.reply_text(
-            response_message, parse_mode="Markdown", reply_markup=ReplyKeyboardRemove()
+            response_message, parse_mode="Markdown"
         )
-        return ConversationHandler.END
+        return SELECT_SEGMENT_TYPE
+
 
     # Columns to include in the output Excel file for each segment, as per "لیست مشتری‌ها.pdf" structure
     output_columns_map = {
@@ -781,7 +784,23 @@ async def send_segment_excel(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     await update.message.reply_text(
         f"لیست مشتریان بخش '{selected_segment_name}' در فایل اکسل پیوست شده است: 📄",
-        reply_markup=ReplyKeyboardRemove(),
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton("ویژه 🏆")],
+                [KeyboardButton("وفادار ✨")],
+                [KeyboardButton("امید بخش 🌱")],
+                [KeyboardButton("در خطر ⚠️")],
+                [KeyboardButton("غیر فعال 💤")],
+                [KeyboardButton("از دست رفته 🗑️")],
+                [KeyboardButton("معمولی 🤝")],
+                [KeyboardButton("فاقد تراکنش 🤷")],
+                [KeyboardButton("📊 RFM Pie Chart")],
+                [KeyboardButton("📊 TAM Bar Chart")],
+                [KeyboardButton("خروج ⬅️")],
+            ],
+            resize_keyboard=True,
+            one_time_keyboard=False,
+        )
     )
     await send_file_to_user(
         update, context, temp_excel_path, caption=f"مشتریان بخش {selected_segment_name}"
@@ -790,7 +809,7 @@ async def send_segment_excel(update: Update, context: ContextTypes.DEFAULT_TYPE)
     os.remove(temp_excel_path)  # Clean up the temporary file
     logger.info(f"Temporary segment report deleted: {temp_excel_path} ✅")
 
-    return ConversationHandler.END
+    return SELECT_SEGMENT_TYPE
 
 
 async def get_full_excel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -896,30 +915,33 @@ def main() -> None:
             SELECT_ENTRY_MODE: [
                 MessageHandler(filters.Text("ثبت خرید تکی ➕"), select_single_entry),
                 MessageHandler(
-                    filters.Text("ثبت چند خرید یکجا 📝"), show_bulk_input_format
+                    filters.Text("ثبت چند خرید (وزودی متنی) 📝"), show_bulk_input_format
                 ),
-                MessageHandler(filters.Text("ثبت خرید با فایل 📄"), start_file_upload_flow),
-                MessageHandler(filters.Text("انصراف 🛑"), cancel),
+                MessageHandler(filters.Text("ثبت خرید با فایل اکسل 📄"), start_file_upload_flow),
+                MessageHandler(filters.Text("خروج ⬅️"), cancel),
             ],
             SINGLE_CUSTOMER_NAME: [
-                MessageHandler(
-                    filters.TEXT & ~filters.COMMAND, get_single_customer_name
-                )
+                    MessageHandler(filters.Text("خروج ⬅️"), cancel),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, get_single_customer_name)
             ],
             SINGLE_CUSTOMER_PHONE: [
+                MessageHandler(filters.Text("خروج ⬅️"), cancel),
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND, get_single_customer_phone
                 )
             ],
             SINGLE_PURCHASE_AMOUNT: [
+                MessageHandler(filters.Text("خروج ⬅️"), cancel),
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND, get_single_purchase_amount
                 )
             ],
             BULK_PURCHASE_DATA: [
+                MessageHandler(filters.Text("خروج ⬅️"), cancel),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, get_bulk_purchase_data)
             ],
             WAITING_FOR_BULK_FILE: [
+                MessageHandler(filters.Text("خروج ⬅️"), cancel),
                 MessageHandler(filters.Document.FileExtension("xlsx"), handle_bulk_purchase_file)
             ],
         },
@@ -932,36 +954,33 @@ def main() -> None:
     application.add_handler(conv_handler)
 
     # ConversationHandler for /analyze_data command 📊
-    analyze_conv_handler = ConversationHandler(
+    analysis_conv_handler = ConversationHandler(
         entry_points=[CommandHandler("analyze_data", analyze_data_entry_point)],
         states={
+
+            # مرحله اول: منوی کلی تحلیل
+            SELECT_ANALYSIS_MENU: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_analysis_menu_choice)
+            ],
+
+            # مرحله دوم: نمایش دسته‌بندی‌ها
             SELECT_SEGMENT_TYPE: [
-                # Match all segment buttons and handle with send_segment_excel
-                MessageHandler(
-                    filters.Text(
-                        [
-                            "ویژه 🏆",
-                            "وفادار ✨",
-                            "امید بخش 🌱",
-                            "در خطر ⚠️",
-                            "غیر فعال 💤",
-                            "از دست رفته 🗑️",
-                            "معمولی 🤝",
-                            "فاقد تراکنش 🤷",
-                            "انصراف 🛑",  # Also allow cancel from this state
-                        ]
-                    ),
-                    send_segment_excel,
-                ),
-                MessageHandler(filters.Text("📊 RFM Pie Chart"), send_rfm_pie_chart),
-                MessageHandler(filters.Text("📊 TAM Bar Chart"), send_tam_bar_chart),
-            ]
+                MessageHandler(filters.Text("🔙 بازگشت"), analyze_data_entry_point),  # برگشت به منوی اول
+                MessageHandler(filters.TEXT & ~filters.COMMAND, send_segment_excel)
+            ],
+
+            # مرحله سوم: نمایش نمودارها
+            SELECT_CHART_TYPE: [
+                MessageHandler(filters.Text("🔙 بازگشت"), analyze_data_entry_point),  # برگشت به منوی اول
+                MessageHandler(filters.Text("📊 نمودار دسته‌های رفتاری"), send_rfm_pie_chart),
+                MessageHandler(filters.Text("📈 نمودار فعالیت زمانی"), send_tam_bar_chart),
+            ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True,
-        per_message=False,
     )
-    application.add_handler(analyze_conv_handler)
+    application.add_handler(analysis_conv_handler)
+
 
     # Existing handlers
     application.add_handler(CommandHandler("start", start))
