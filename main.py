@@ -148,6 +148,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"خوش آمدید {user.first_name}! 😊\n"
             "می‌توانید از دستورات زیر استفاده کنید:\n"
             "/new_purchase - ثبت خرید جدید 🛒\n"
+            "/import_transactions - بارگزاری تراکنش ها 📄\n"
             "/list_customers - لیست مشتریان 👥\n"
             "/list_transactions - تاریخچه تراکنش‌ها 💰\n"
             "/analyze_data - تحلیل رفتار مشتریان 📊\n",
@@ -186,6 +187,7 @@ async def handle_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(
             "اکنون می‌توانید از دستورات زیر استفاده کنید:\n"
             "/new_purchase - ثبت خرید جدید 🛒\n"
+            "/import_transactions - بارگزاری تراکنش ها 📄\n"
             "/list_customers - لیست مشتریان 👥\n"
             "/list_transactions - تاریخچه تراکنش‌ها 💰\n"
             "/analyze_data - تحلیل رفتار مشتریان 📊\n",
