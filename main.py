@@ -22,6 +22,7 @@ from telegram.ext import (
 )  # Import CallbackQueryHandler
 from dotenv import load_dotenv
 import pandas as pd  # Import pandas for DataFrame manipulation
+import re
 
 # Import custom modules 📚
 import excel_manager
@@ -38,6 +39,10 @@ from scheduler import start_scheduler
 
 # notifications
 from notifications import check_and_notify_vip_after_purchase
+
+# date
+import datetime
+import jdatetime
 
 # load env
 load_dotenv()
@@ -108,8 +113,6 @@ async def send_file_to_user(
 
 
 # --- Command Handlers 🚀 ---
-
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handles the /start command. 👋
@@ -567,6 +570,210 @@ async def list_transactions(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         os.remove(temp_excel_path)  # Delete the temporary file after sending 🚮
         logger.info(f"Temporary transaction report deleted: {temp_excel_path} ✅")
 
+# --- Import historical transactions from Excel file ---
+def convert_to_shamsi_if_needed(date_str):
+    """
+    اگر تاریخ میلادی بود به شمسی تبدیل کن. اگر خودش شمسی بود و معتبر بود، همون رو بده.
+    خروجی همیشه به صورت yyyy-mm-dd
+    """
+    try:
+        parsed = pd.to_datetime(date_str, errors='raise')
+        shamsi = jdatetime.date.fromgregorian(date=parsed.date())
+        return f"{shamsi.year}-{shamsi.month:02}-{shamsi.day:02}"
+    except Exception:
+        # فرض بر این که خودش شمسی بوده
+        try:
+            y, m, d = map(int, date_str.split("-"))
+            _ = jdatetime.date(y, m, d)  # اگر ایراد داشت، اینجا خطا میده
+            return f"{y}-{m:02}-{d:02}"
+        except Exception:
+            raise ValueError(f"تاریخ '{date_str}' معتبر نیست.")
+
+
+# --- Import historical transactions from Excel file ---
+def convert_to_shamsi_if_needed(date_input):
+    """
+    Converts a date string (Gregorian or Shamsi) to a Shamsi date string (YYYY-MM-DD).
+    Handles NaN values and invalid date strings gracefully.
+    Returns 'N/A' for invalid or NaN dates.
+    """
+    if pd.isna(date_input) or str(date_input).strip().lower() == 'nan':
+        return 'N/A' # Explicitly handle NaN
+    
+    date_str = str(date_input).strip()
+
+    try:
+        # Try parsing as Gregorian first
+        parsed = pd.to_datetime(date_str, errors='coerce')
+        if pd.notna(parsed):
+            shamsi = jdatetime.date.fromgregorian(date=parsed.date())
+            return f"{shamsi.year}-{shamsi.month:02}-{shamsi.day:02}"
+    except Exception:
+        pass # Fall through to try as Shamsi
+
+    try:
+        # Assume it's already Shamsi
+        y, m, d = map(int, date_str.split("-"))
+        _ = jdatetime.date(y, m, d)  # Validate if it's a valid Shamsi date
+        return f"{y}-{m:02}-{d:02}"
+    except Exception:
+        pass # Fall through to return N/A
+
+    return 'N/A' # If neither works, return 'N/A'
+
+
+def import_transactions_from_excel(user_id, file_path):
+    """
+    Imports past customer transactions from a user-provided Excel file.
+    Expected columns: نام مشتری، شماره تماس، مبلغ (تومان)، تاریخ خرید
+    """
+    excel_path = get_user_excel_path(user_id)
+
+    # Load existing data or create empty DataFrames if file doesn't exist
+    if os.path.exists(excel_path):
+        customers_df = pd.read_excel(excel_path, sheet_name="Customers")
+        transactions_df = pd.read_excel(excel_path, sheet_name="Transactions")
+    else:
+        # Create empty DataFrames with correct columns if the Excel file doesn't exist
+        customers_df = pd.DataFrame(columns=["کد مشتری", "نام", "شماره تماس", "تاریخ عضویت", "توضیحات"])
+        transactions_df = pd.DataFrame(columns=["شناسه مشتری", "تاریخ فاکتور", "شماره فاکتور", "مبلغ (تومان)"])
+        # Ensure the Excel file is created if it doesn't exist before attempting to load/write
+        excel_manager.create_initial_excel(excel_path)
+
+    df_import = pd.read_excel(file_path) # Read the imported file
+    required_cols = ["نام مشتری", "شماره تماس", "مبلغ (تومان)", "تاریخ خرید"]
+    if not all(col in df_import.columns for col in required_cols):
+        raise ValueError("فایل باید دارای ستون‌های: نام مشتری، شماره تماس، مبلغ (تومان)، تاریخ خرید باشد.")
+
+    # Determine the starting invoice counter
+    # Handle cases where 'شماره فاکتور' might be non-numeric or empty
+    max_invoice_num = 0
+    if not transactions_df.empty and "شماره فاکتور" in transactions_df.columns:
+        # Extract numeric part, handle potential non-string values or NaNs
+        existing_nums = transactions_df["شماره فاکتور"].dropna().astype(str).str.extract(r'INV(\d+)')[0]
+        if not existing_nums.empty:
+            max_invoice_num = max(pd.to_numeric(existing_nums, errors='coerce').dropna())
+    
+    invoice_counter = int(max_invoice_num) + 1 if pd.notna(max_invoice_num) else 100
+
+    processed_rows = 0
+    for _, row in df_import.iterrows():
+        try:
+            name = str(row["نام مشتری"]).strip()
+            phone = str(row["شماره تماس"]).strip()
+
+            # Safe conversion of amount
+            amount_str = str(row["مبلغ (تومان)"]).replace(",", "").strip()
+            amount = int(float(amount_str)) # Convert to float first to handle decimals from excel, then to int
+
+            # Date conversion (might be Gregorian or Shamsi)
+            date_raw = row["تاریخ خرید"] # Keep as is, let helper function handle type
+            date = convert_to_shamsi_if_needed(date_raw)
+
+            if date == 'N/A':
+                logger.warning(f"Skipping row due to invalid date: {row.to_dict()}")
+                continue # Skip this row if date is invalid
+
+        except Exception as e:
+            logger.error(f"خطا در خواندن سطر: {row.to_dict()} → {e}")
+            continue # Skip row on error
+
+        # Check for existing customer
+        existing_customer = customers_df[
+            (customers_df["نام"] == name) & (customers_df["شماره تماس"] == phone)
+        ]
+
+        customer_id = None
+        if not existing_customer.empty:
+            customer_id = existing_customer.iloc[0]["کد مشتری"]
+        else:
+            # Generate new customer ID
+            last_id = 0
+            if not customers_df.empty and "کد مشتری" in customers_df.columns:
+                existing_customer_ids_numeric_str = customers_df["کد مشتری"].dropna().astype(str).str.extract(r'C(\d+)')[0]
+                if not existing_customer_ids_numeric_str.empty:
+                    last_id = max(pd.to_numeric(existing_customer_ids_numeric_str, errors='coerce').dropna().astype(int))
+
+            customer_id = f"C{last_id + 1:03}"
+            new_customer = {
+                "کد مشتری": customer_id,
+                "نام": name,
+                "شماره تماس": phone,
+                "تاریخ عضویت": date, # Use the converted date here
+                "توضیحات": "",
+            }
+            customers_df = pd.concat([customers_df, pd.DataFrame([new_customer])], ignore_index=True)
+
+        new_transaction = {
+            "شناسه مشتری": customer_id,
+            "تاریخ فاکتور": date, # Use the converted date here
+            "شماره فاکتور": f"INV{invoice_counter:03}", # Format invoice number
+            "مبلغ (تومان)": amount,
+        }
+        transactions_df = pd.concat([transactions_df, pd.DataFrame([new_transaction])], ignore_index=True)
+        invoice_counter += 1
+        processed_rows += 1
+
+    # Save the updated DataFrames to the Excel file
+    # Use mode='w' to overwrite the file and if_sheet_exists='replace'
+    with pd.ExcelWriter(excel_path, engine='openpyxl', mode='w') as writer:
+        customers_df.to_excel(writer, sheet_name="Customers", index=False)
+        transactions_df.to_excel(writer, sheet_name="Transactions", index=False)
+    
+    return processed_rows, len(customers_df), len(transactions_df)
+
+# این متغیر در ConversationHandler استفاده خواهد شد
+WAITING_FOR_IMPORT_FILE = 9999  # باید عددی منحصر به‌فرد باشه خارج از مقادیر دیگر state ها
+
+async def import_transactions_entry_point(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await update.message.reply_text(
+        "لطفاً فایل اکسل تراکنش‌های گذشته را ارسال کنید. 📄\n\n"
+        "فایل باید دارای ستون‌های زیر باشد:\n"
+        "- نام مشتری\n- شماره تماس\n- مبلغ (تومان)\n- تاریخ خرید\n\n"
+        "پس از دریافت فایل، عملیات وارد کردن آغاز خواهد شد.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return WAITING_FOR_IMPORT_FILE
+
+
+async def handle_import_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.effective_user.id
+    document = update.message.document
+
+    if not document.file_name.endswith(".xlsx"):
+        await update.message.reply_text("فایل باید با فرمت .xlsx باشد.")
+        # Allow user to send correct file or cancel, stay in state
+        return WAITING_FOR_IMPORT_FILE
+
+    file_path = os.path.join(DATA_DIR, str(user_id), "imported_transactions.xlsx")
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+    # دانلود فایل
+    file = await document.get_file()
+    await file.download_to_drive(file_path)
+
+    try:
+        imported_count, updated_customers, updated_transactions = import_transactions_from_excel(user_id, file_path)
+        await update.message.reply_text(
+            f"✅ عملیات وارد کردن تراکنش‌ها با موفقیت انجام شد!\n\n"
+            f"🔢 تعداد ردیف‌های ورودی: {imported_count}\n"
+            f"👥 تعداد کل مشتریان (پس از بروزرسانی): {updated_customers}\n"
+            f"🧾 تعداد کل تراکنش‌ها (پس از بروزرسانی): {updated_transactions}"
+        )
+        # After successful import, also run VIP notification check
+        await check_and_notify_vip_after_purchase(user_id, context, update.effective_chat.id)
+        
+    except Exception as e:
+        logger.error(f"❌ خطا در پردازش فایل: {e}")
+        await update.message.reply_text(f"❌ خطا در پردازش فایل: {e}")
+    finally:
+        if os.path.exists(file_path):
+            os.remove(file_path) # Clean up the uploaded file
+            logger.info(f"Temporary imported transactions file deleted: {file_path} ✅")
+
+
+    return ConversationHandler.END
+
 
 # async def analyze_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 #     """
@@ -980,6 +1187,18 @@ def main() -> None:
         allow_reentry=True,
     )
     application.add_handler(analysis_conv_handler)
+    
+    # هندلر مخصوص بارگذاری تراکنش‌های قدیمی
+    import_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("import_transactions", import_transactions_entry_point)],
+        states={
+            WAITING_FOR_IMPORT_FILE: [MessageHandler(filters.Document.FileExtension("xlsx") & filters.Document.MimeType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"), handle_import_file)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_message=False,
+        allow_reentry=True,
+    )
+    application.add_handler(import_conv_handler)
 
 
     # Existing handlers
@@ -989,6 +1208,7 @@ def main() -> None:
     application.add_handler(CommandHandler("list_transactions", list_transactions))
     # application.add_handler(CommandHandler("analyze_data", analyze_data))
     application.add_handler(CommandHandler("get_full_excel", get_full_excel))
+    application.add_handler(CommandHandler("import_transactions", import_transactions_entry_point))
 
     # Run the bot until the user presses Ctrl-C 🏃‍♂️
     logger.info("Bot started polling... 🟢")

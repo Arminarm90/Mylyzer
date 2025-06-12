@@ -26,8 +26,8 @@ def create_initial_excel(file_path):
         ws_transactions.append(["شناسه مشتری", "تاریخ فاکتور", "شماره فاکتور", "مبلغ (تومان)"])
 
         # Create Form sheet with headers (primarily for mimicking the Excel input form structure) 📝
-        ws_form = wb.create_sheet("Form")
-        ws_form.append(["نام مشتری", "کد مشتری", "شماره تماس", "تاریخ فاکتور", "شماره فاکتور", "مبلغ (تومان)"])
+        # ws_form = wb.create_sheet("Form")
+        # ws_form.append(["نام مشتری", "کد مشتری", "شماره تماس", "تاریخ فاکتور", "شماره فاکتور", "مبلغ (تومان)"])
 
         wb.save(file_path)
         print(f"Initial Excel file created at {file_path} ✨")
@@ -133,13 +133,13 @@ def save_purchase(file_path, customer_name, customer_phone, amount):
     # --- Update Form Sheet (for display/mimicking original Excel behavior) 📝 ---
     # In a bot, this sheet isn't used for input, but we can update it with the last recorded transaction
     # to show the user what was just processed, if they were to open the Excel file. 📊
-    ws_form = wb["Form"]
-    # Clear previous data in Form sheet (assuming it only holds one transaction at a time) 🧹
-    for row in ws_form.iter_rows(min_row=2, max_row=ws_form.max_row, max_col=ws_form.max_column):
-        for cell in row:
-            cell.value = None
-    # Append the new transaction details to the Form sheet ➕
-    ws_form.append([customer_name, customer_id, customer_phone, invoice_date, invoice_number, amount])
+    # ws_form = wb["Form"]
+    # # Clear previous data in Form sheet (assuming it only holds one transaction at a time) 🧹
+    # for row in ws_form.iter_rows(min_row=2, max_row=ws_form.max_row, max_col=ws_form.max_column):
+    #     for cell in row:
+    #         cell.value = None
+    # # Append the new transaction details to the Form sheet ➕
+    # ws_form.append([customer_name, customer_id, customer_phone, invoice_date, invoice_number, amount])
     print("Form sheet updated with latest transaction. ✅")
 
     # Save the entire workbook 💾
@@ -181,11 +181,11 @@ def save_purchase_bulk(file_path, customer_name, customer_phone, amount, descrip
     ws_transactions.append([customer_id, invoice_date, invoice_number, amount])
 
     # Form Sheet: optional
-    ws_form = wb["Form"]
-    for row in ws_form.iter_rows(min_row=2, max_row=ws_form.max_row):
-        for cell in row:
-            cell.value = None
-    ws_form.append([customer_name, customer_id, customer_phone, invoice_date, invoice_number, amount])
+    # ws_form = wb["Form"]
+    # for row in ws_form.iter_rows(min_row=2, max_row=ws_form.max_row):
+    #     for cell in row:
+    #         cell.value = None
+    # ws_form.append([customer_name, customer_id, customer_phone, invoice_date, invoice_number, amount])
 
     wb.save(file_path)
 
